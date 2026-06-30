@@ -1,6 +1,6 @@
 # Colored Token Usage Meter
 
-A small Codex CLI hook package that prints a colored meter from Codex-native `token_count` events on `SessionStart` and when `UserPromptSubmit` runs before a prompt is sent.
+A small Codex CLI hook package that prints a colored meter from the active Codex transcript's native `token_count` events on `SessionStart` and when `UserPromptSubmit` runs before a prompt is sent.
 
 Example output:
 
@@ -14,7 +14,7 @@ Colors:
 - Orange at or above the warning threshold and below the session threshold
 - Red at or above the session threshold, default `100000`
 
-The meter uses one filled block per complete 10,000 input tokens, capped at ten filled blocks. The primary numerator is Codex `last_token_usage.input_tokens`; cached input, output, and total tokens are shown as detail fields.
+The meter uses one filled block per complete 10,000 input tokens, capped at ten filled blocks. The primary numerator is Codex `last_token_usage.input_tokens`; cached input, output, and total tokens are shown as detail fields. The percentage denominator is the `model_context_window` reported in the same Codex `token_count` event.
 
 ## Install
 
@@ -50,7 +50,7 @@ Verified against Codex CLI `0.142.4` and the current official Codex manual in th
 - Trust is attached to the exact hook definition hash. Changed hook definitions may need review again.
 - Use `/hooks` in the Codex CLI to inspect, review, trust, or disable non-managed hooks.
 
-Current Codex behavior observed in this environment: plain text written to `UserPromptSubmit` stdout may be displayed by Codex as hook context and added as developer context for the turn. This package deliberately keeps that output short, but it is model-visible context and is not a completely independent status-bar extension.
+Current Codex behavior observed in this environment: plain text written to `UserPromptSubmit` stdout may be displayed by Codex as hook context and added as developer context for the turn. This package deliberately keeps that output short, but it is model-visible context and is not a completely independent status-bar extension. Because `UserPromptSubmit` runs before the new prompt is sent, the meter normally reflects the latest completed provider-reported usage already present in the active transcript.
 
 Automated ANSI tests prove only the bytes emitted by these scripts. They do not prove that the Codex TUI visibly renders those bytes as color.
 
@@ -60,10 +60,8 @@ Environment variables:
 
 - `OPENCLAW_PROMPT_WARNING_LIMIT`, default `90000`
 - `OPENCLAW_PROMPT_SOFT_LIMIT`, default `100000`
-- `OPENCLAW_PROMPT_CONTEXT_FALLBACK`, default `272000`
-- `CODEX_HOME`, default `~/.codex`, used to locate `sessions/**/*.jsonl`
 
-Invalid, non-finite, or non-positive threshold and context fallback values are ignored in favor of defaults. Negative or non-numeric token counts normalize to `0`.
+Invalid, non-finite, or non-positive threshold values are ignored in favor of defaults. The meter emits nothing unless Codex hook input includes a non-empty `transcript_path` and the active transcript contains a valid `token_count` event with numeric `last_token_usage` fields and a positive `model_context_window`. Missing or malformed usage is not treated as zero.
 
 ## Test Locally
 
@@ -75,19 +73,9 @@ tests/run-tests.sh
 
 The tests use temporary directories only. They do not read or modify the real user home, real `~/.codex`, `~/.openclaw`, Codex authentication, or live Codex session files.
 
-The suite covers installer safety, exact package-handler merging, idempotence, invalid JSON handling, paths with spaces and quotes, installed permissions, missing dependencies, Codex `token_count` fixture lookup, numeric validation, threshold boundaries, ANSI bytes, and wrapper failure behavior.
+The suite covers installer safety, exact package-handler merging, idempotence, invalid JSON handling, paths with spaces and quotes, installed permissions, missing dependencies, active-transcript selection from hook input, Codex `token_count` fixture parsing, strict numeric validation, threshold boundaries, ANSI bytes, and wrapper failure behavior.
 
-Run the status hook directly after install:
-
-```bash
-~/scripts/openclaw-session-tokens-status
-```
-
-Inspect ANSI color bytes:
-
-```bash
-~/scripts/openclaw-session-tokens-status | od -An -tx1 -c
-```
+The status hook is intended to run under Codex, which supplies hook JSON on stdin. Without hook input containing `transcript_path`, it exits successfully with no output. Automated tests cover direct execution with simulated hook input and exact ANSI bytes.
 
 ## Manual Clean Codex Test
 
@@ -144,13 +132,7 @@ NODE
 
 Both printed counts should be `1`.
 
-The automated tests cover controlled Codex token fixtures. For a manual live check, verify the hook independently:
-
-```bash
-~/scripts/openclaw-session-tokens-status
-```
-
-Launch Codex:
+The automated tests cover controlled Codex token fixtures and simulated hook input. For a manual live check, launch Codex:
 
 ```bash
 codex
@@ -163,7 +145,7 @@ In Codex:
 3. Review and trust both handlers.
 4. Submit a prompt.
 5. Confirm `UserPromptSubmit` runs exactly once for that prompt.
-6. Confirm the meter starts with `CX` and matches the latest Codex-native `token_count` event.
+6. Confirm the meter starts with `CX` and matches the latest valid Codex-native `token_count` event in the active transcript.
 7. Exit Codex and start it again; confirm `SessionStart` runs on startup.
 8. Resume the same session; confirm `SessionStart` runs on resume.
 
@@ -173,7 +155,7 @@ Expected hook context should look like this, with values depending on the curren
 CX 172k/258k 67% [##########] in 172k cached 170k out 2k total 174k >= 100k new session
 ```
 
-The meter reads the latest local Codex JSONL session file under `$CODEX_HOME/sessions` or `~/.codex/sessions`. To test missing-data behavior without touching real state, start Codex with a temporary empty `CODEX_HOME` and run the hook after trusting it.
+The meter reads only the transcript file named by Codex hook input `transcript_path`; it does not scan other local sessions as a fallback. To test missing-data behavior, use a new or empty active transcript and confirm the hook exits quietly.
 
 Manual-only assertions:
 
