@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const hooksPath = path.join(os.homedir(), '.codex/hooks.json')
 const config = readJson(hooksPath) || {}
@@ -32,7 +32,7 @@ ensureHook(config.hooks, 'UserPromptSubmit', {
 })
 
 fs.mkdirSync(path.dirname(hooksPath), { recursive: true })
-fs.writeFileSync(hooksPath, `${JSON.stringify(config, null, 2)}\n`)
+writeJsonAtomic(hooksPath, config)
 
 function readJson(file) {
   try {
@@ -43,16 +43,41 @@ function readJson(file) {
   }
 }
 
+function writeJsonAtomic(file, value) {
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`)
+  fs.renameSync(tmp, file)
+}
+
 function ensureHook(hooks, event, entry) {
   hooks[event] ||= []
-  const command = entry.hooks?.[0]?.command
-  const existingIndex = hooks[event].findIndex((candidate) =>
-    candidate?.hooks?.some((hook) => hook?.command === command),
+
+  const desiredHandlers = entry.hooks || []
+  const desiredCommands = new Set(
+    desiredHandlers
+      .map((handler) => handler?.command)
+      .filter((command) => typeof command === 'string'),
   )
 
-  if (existingIndex === -1) {
+  const groupIndex = hooks[event].findIndex((candidate) =>
+    candidate?.hooks?.some((handler) => desiredCommands.has(handler?.command)),
+  )
+
+  if (groupIndex === -1) {
     hooks[event].push(entry)
-  } else {
-    hooks[event][existingIndex] = entry
+    return
+  }
+
+  const existingGroup = hooks[event][groupIndex]
+  const existingHandlers = Array.isArray(existingGroup.hooks) ? existingGroup.hooks : []
+  const mergedHandlers = [
+    ...existingHandlers.filter((handler) => !desiredCommands.has(handler?.command)),
+    ...desiredHandlers,
+  ]
+
+  hooks[event][groupIndex] = {
+    ...existingGroup,
+    ...entry,
+    hooks: mergedHandlers,
   }
 }

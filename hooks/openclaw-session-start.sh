@@ -11,7 +11,7 @@ if [[ ! -x "$prompt_script" ]]; then
   exit 0
 fi
 
-raw="$($prompt_script 2>/dev/null || true)"
+raw="$("$prompt_script" 2>/dev/null || true)"
 if [[ -z "$raw" ]]; then
   printf '%s openclaw token status unavailable\n' "$(date -Is)" >>"$log_file"
   exit 0

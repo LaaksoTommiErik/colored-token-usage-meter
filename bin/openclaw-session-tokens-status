@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-raw="$($HOME/scripts/openclaw-session-tokens-prompt.js 2>/dev/null || true)"
+raw="$("$HOME/scripts/openclaw-session-tokens-prompt.js" 2>/dev/null || true)"
 color="${raw%%$'\t'*}"
 text="${raw#*$'\t'}"
 
