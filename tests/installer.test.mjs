@@ -63,6 +63,31 @@ function mode(file) {
   return fs.statSync(file).mode & 0o777
 }
 
+function writeCodexTokenSession(root, usage = {}) {
+  const codexHome = path.join(root, 'codex-home')
+  const sessionDir = path.join(codexHome, 'sessions/2026/06/30')
+  fs.mkdirSync(sessionDir, { recursive: true })
+  const event = {
+    timestamp: '2026-06-30T00:00:00.000Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        last_token_usage: {
+          input_tokens: usage.input_tokens ?? 68000,
+          cached_input_tokens: usage.cached_input_tokens ?? 64000,
+          output_tokens: usage.output_tokens ?? 500,
+          reasoning_output_tokens: usage.reasoning_output_tokens ?? 100,
+          total_tokens: usage.total_tokens ?? 68500,
+        },
+        model_context_window: usage.model_context_window ?? 258400,
+      },
+    },
+  }
+  fs.writeFileSync(path.join(sessionDir, 'session.jsonl'), JSON.stringify(event) + '\n')
+  return codexHome
+}
+
 test('fresh installation into an empty temporary HOME', () => {
   const home = tmpDir('fresh')
   installOk(home)
@@ -194,15 +219,12 @@ test('HOME path containing spaces works and hook command executes through a shel
   const command = config.hooks.UserPromptSubmit.at(-1).hooks[0].command
   assert.equal(command, canonicalCommands(home).prompt)
 
-  const sessions = path.join(root, 'sessions.json')
-  fs.writeFileSync(sessions, JSON.stringify({
-    'agent:main:main': { totalTokens: 68000, contextTokens: 272000, totalTokensFresh: true, updatedAt: 100 },
-  }))
+  const codexHome = writeCodexTokenSession(root)
   const output = execFileSync('bash', ['-lc', command], {
-    env: { ...process.env, HOME: home, OPENCLAW_SESSIONS_PATH: sessions },
+    env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
     encoding: 'utf8',
   })
-  assert.match(output, /OC 68k\/272k 25% \[######----\]/)
+  assert.match(output, /CX 68k\/258k 26% \[######----\]/)
 })
 
 test('HOME path containing shell-sensitive quote is shell-quoted safely', () => {

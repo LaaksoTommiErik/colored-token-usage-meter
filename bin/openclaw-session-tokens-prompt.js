@@ -3,14 +3,12 @@
 const fs = require('fs')
 const path = require('path')
 
-const DEFAULT_SESSION_KEY = 'agent:main:main'
 const DEFAULT_CONTEXT_FALLBACK = 272000
 const DEFAULT_WARNING_LIMIT = 90000
 const DEFAULT_SESSION_LIMIT = 100000
 
 const home = process.env.HOME || ''
-const sessionsPath = process.env.OPENCLAW_SESSIONS_PATH || path.join(home, '.openclaw/agents/main/sessions/sessions.json')
-const sessionKey = process.env.OPENCLAW_PROMPT_SESSION_KEY || DEFAULT_SESSION_KEY
+const codexHome = process.env.CODEX_HOME || path.join(home, '.codex')
 const warningLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_WARNING_LIMIT', DEFAULT_WARNING_LIMIT)
 const sessionLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_SOFT_LIMIT', DEFAULT_SESSION_LIMIT)
 const contextFallback = positiveFiniteFromEnv('OPENCLAW_PROMPT_CONTEXT_FALLBACK', DEFAULT_CONTEXT_FALLBACK)
@@ -39,15 +37,6 @@ function formatMeter(value) {
   return `[${'#'.repeat(filled)}${'-'.repeat(blockCount - filled)}]`
 }
 
-function readSessions() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'))
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
 function positiveFiniteFromEnv(name, fallback) {
   const value = Number(process.env[name])
   return Number.isFinite(value) && value > 0 ? value : fallback
@@ -63,39 +52,81 @@ function positiveFinite(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback
 }
 
-function updatedAtValue(record) {
-  if (!record || typeof record !== 'object') return 0
-  const value = Number(record.updatedAt)
-  return Number.isFinite(value) ? value : 0
-}
-
-function pickRecord(sessions) {
-  if (!sessions) return null
-  if (sessions[sessionKey] && typeof sessions[sessionKey] === 'object') {
-    return sessions[sessionKey]
+function collectSessionFiles(dir, out = []) {
+  let entries
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return out
   }
 
-  return Object.values(sessions)
-    .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
-    .sort((a, b) => updatedAtValue(b) - updatedAtValue(a))[0] || null
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      collectSessionFiles(full, out)
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      try {
+        out.push({ file: full, mtimeMs: fs.statSync(full).mtimeMs })
+      } catch {
+        // Ignore files that disappear while scanning.
+      }
+    }
+  }
+  return out
 }
 
-const record = pickRecord(readSessions())
+function latestCodexTokenCount() {
+  const files = collectSessionFiles(path.join(codexHome, 'sessions'))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, 25)
 
-if (!record) {
-  process.exit(0)
+  for (const { file } of files) {
+    const tokenCount = lastTokenCountInFile(file)
+    if (tokenCount) return tokenCount
+  }
+  return null
 }
 
-const total = nonNegativeFinite(record.totalTokens)
-const context = positiveFinite(record.contextTokens, positiveFinite(record.modelContextWindow, contextFallback))
-const percent = Math.round((total / context) * 100)
-const stale = record.totalTokensFresh === false ? '~' : ''
-const overLimit = total >= sessionLimit
-const meter = formatMeter(total)
+function lastTokenCountInFile(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+
+  const lines = text.trimEnd().split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let event
+    try {
+      event = JSON.parse(lines[i])
+    } catch {
+      continue
+    }
+    if (event?.type === 'event_msg' && event.payload?.type === 'token_count') {
+      return event.payload.info || null
+    }
+  }
+  return null
+}
+
+const tokenCount = latestCodexTokenCount()
+if (!tokenCount) process.exit(0)
+
+const last = tokenCount.last_token_usage || {}
+const used = nonNegativeFinite(last.input_tokens)
+const total = nonNegativeFinite(last.total_tokens)
+const cached = nonNegativeFinite(last.cached_input_tokens)
+const output = nonNegativeFinite(last.output_tokens)
+const context = positiveFinite(tokenCount.model_context_window, contextFallback)
+const percent = Math.round((used / context) * 100)
+const overLimit = used >= sessionLimit
+const meter = formatMeter(used)
+const detail = `in ${formatTokens(used)} cached ${formatTokens(cached)} out ${formatTokens(output)} total ${formatTokens(total)}`
 
 const label = overLimit
-  ? `OC ${stale}${formatTokens(total)} ${meter} >= ${formatTokens(sessionLimit)} new session`
-  : `OC ${stale}${formatTokens(total)}/${formatTokens(context)} ${percent}% ${meter}`
+  ? `CX ${formatTokens(used)}/${formatTokens(context)} ${percent}% ${meter} ${detail} >= ${formatTokens(sessionLimit)} new session`
+  : `CX ${formatTokens(used)}/${formatTokens(context)} ${percent}% ${meter} ${detail}`
 
-const color = total >= sessionLimit ? '91' : total >= warningLimit ? '33' : '32'
+const color = used >= sessionLimit ? '91' : used >= warningLimit ? '33' : '32'
 console.log(`${color}\t${label}`)

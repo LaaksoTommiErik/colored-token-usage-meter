@@ -1,11 +1,11 @@
 # Colored Token Usage Meter
 
-A small Codex CLI/OpenClaw hook package that prints a colored token usage meter on `SessionStart` and when `UserPromptSubmit` runs before a prompt is sent.
+A small Codex CLI hook package that prints a colored meter from Codex-native `token_count` events on `SessionStart` and when `UserPromptSubmit` runs before a prompt is sent.
 
 Example output:
 
 ```text
-OC 68k/272k 25% [######----]
+CX 172k/258k 67% [##########] in 172k cached 170k out 2k total 174k
 ```
 
 Colors:
@@ -14,7 +14,7 @@ Colors:
 - Orange at or above the warning threshold and below the session threshold
 - Red at or above the session threshold, default `100000`
 
-The meter uses one filled block per complete 10,000 tokens, capped at ten filled blocks.
+The meter uses one filled block per complete 10,000 input tokens, capped at ten filled blocks. The primary numerator is Codex `last_token_usage.input_tokens`; cached input, output, and total tokens are shown as detail fields.
 
 ## Install
 
@@ -58,11 +58,10 @@ Automated ANSI tests prove only the bytes emitted by these scripts. They do not 
 
 Environment variables:
 
-- `OPENCLAW_PROMPT_SESSION_KEY`, default `agent:main:main`
 - `OPENCLAW_PROMPT_WARNING_LIMIT`, default `90000`
 - `OPENCLAW_PROMPT_SOFT_LIMIT`, default `100000`
 - `OPENCLAW_PROMPT_CONTEXT_FALLBACK`, default `272000`
-- `OPENCLAW_SESSIONS_PATH`, default `~/.openclaw/agents/main/sessions/sessions.json`
+- `CODEX_HOME`, default `~/.codex`, used to locate `sessions/**/*.jsonl`
 
 Invalid, non-finite, or non-positive threshold and context fallback values are ignored in favor of defaults. Negative or non-numeric token counts normalize to `0`.
 
@@ -74,9 +73,9 @@ Run the automated test suite:
 tests/run-tests.sh
 ```
 
-The tests use temporary directories only. They do not read or modify the real user home, `~/.codex`, `~/.openclaw`, Codex authentication, or real OpenClaw sessions.
+The tests use temporary directories only. They do not read or modify the real user home, real `~/.codex`, `~/.openclaw`, Codex authentication, or live Codex session files.
 
-The suite covers installer safety, exact package-handler merging, idempotence, invalid JSON handling, paths with spaces and quotes, installed permissions, missing dependencies, runtime fixture lookup, a sanitized current-session-shape fixture, numeric validation, threshold boundaries, ANSI bytes, and wrapper failure behavior.
+The suite covers installer safety, exact package-handler merging, idempotence, invalid JSON handling, paths with spaces and quotes, installed permissions, missing dependencies, Codex `token_count` fixture lookup, numeric validation, threshold boundaries, ANSI bytes, and wrapper failure behavior.
 
 Run the status hook directly after install:
 
@@ -145,23 +144,7 @@ NODE
 
 Both printed counts should be `1`.
 
-Create a controlled 68,000-token fixture:
-
-```bash
-mkdir -p ~/.openclaw/agents/main/sessions
-cat > ~/.openclaw/agents/main/sessions/sessions.json <<'JSON'
-{
-  "agent:main:main": {
-    "totalTokens": 68000,
-    "contextTokens": 272000,
-    "totalTokensFresh": true,
-    "updatedAt": 100
-  }
-}
-JSON
-```
-
-Verify the hook independently:
+The automated tests cover controlled Codex token fixtures. For a manual live check, verify the hook independently:
 
 ```bash
 ~/scripts/openclaw-session-tokens-status
@@ -180,59 +163,17 @@ In Codex:
 3. Review and trust both handlers.
 4. Submit a prompt.
 5. Confirm `UserPromptSubmit` runs exactly once for that prompt.
-6. Confirm the green meter appears for `68,000` tokens.
+6. Confirm the meter starts with `CX` and matches the latest Codex-native `token_count` event.
 7. Exit Codex and start it again; confirm `SessionStart` runs on startup.
 8. Resume the same session; confirm `SessionStart` runs on resume.
 
-From another terminal as `codex-hook-test`, switch the fixture to 95,000 tokens:
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-path = Path.home() / ".openclaw/agents/main/sessions/sessions.json"
-data = json.loads(path.read_text())
-data["agent:main:main"]["totalTokens"] = 95000
-data["agent:main:main"]["updatedAt"] += 1
-path.write_text(json.dumps(data, indent=2) + "\n")
-PY
-```
-
-Submit another prompt. Expected hook context:
+Expected hook context should look like this, with values depending on the current Codex session:
 
 ```text
-OC 95k/272k 35% [#########-]
+CX 172k/258k 67% [##########] in 172k cached 170k out 2k total 174k >= 100k new session
 ```
 
-Switch the fixture to 100,000 tokens:
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-path = Path.home() / ".openclaw/agents/main/sessions/sessions.json"
-data = json.loads(path.read_text())
-data["agent:main:main"]["totalTokens"] = 100000
-data["agent:main:main"]["updatedAt"] += 1
-path.write_text(json.dumps(data, indent=2) + "\n")
-PY
-```
-
-Submit another prompt. Expected hook context:
-
-```text
-OC 100k [##########] >= 100k new session
-```
-
-Temporarily move the sessions file away and submit one more prompt:
-
-```bash
-mv ~/.openclaw/agents/main/sessions/sessions.json ~/.openclaw/agents/main/sessions/sessions.json.bak
-```
-
-Expected result: prompt submission is not blocked, no timeout warning appears, and no hook-failure warning appears.
+The meter reads the latest local Codex JSONL session file under `$CODEX_HOME/sessions` or `~/.codex/sessions`. To test missing-data behavior without touching real state, start Codex with a temporary empty `CODEX_HOME` and run the hook after trusting it.
 
 Manual-only assertions:
 
