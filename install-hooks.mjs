@@ -4,32 +4,55 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+const HOOK_STATUS = 'Loading OpenClaw session token status'
+const SESSION_START_MATCHER = 'startup|resume'
+
 const hooksPath = path.join(os.homedir(), '.codex/hooks.json')
+const sessionStartPath = path.join(os.homedir(), '.codex/hooks/openclaw-session-start.sh')
+const promptStatusPath = path.join(os.homedir(), 'scripts/openclaw-session-tokens-status')
+
+const canonicalSessionCommand = shellQuote(sessionStartPath)
+const canonicalPromptCommand = shellQuote(promptStatusPath)
+
+// Exact package-owned commands from this package. The unquoted variants are
+// recognized only to clean up releases that installed the same absolute paths
+// before shell quoting was added.
+const packageCommands = {
+  SessionStart: new Set([canonicalSessionCommand, sessionStartPath]),
+  UserPromptSubmit: new Set([canonicalPromptCommand, promptStatusPath]),
+}
+
+const canonicalGroups = {
+  SessionStart: {
+    matcher: SESSION_START_MATCHER,
+    hooks: [
+      {
+        type: 'command',
+        command: canonicalSessionCommand,
+        timeout: 10,
+        statusMessage: HOOK_STATUS,
+      },
+    ],
+  },
+  UserPromptSubmit: {
+    hooks: [
+      {
+        type: 'command',
+        command: canonicalPromptCommand,
+        timeout: 10,
+        statusMessage: HOOK_STATUS,
+      },
+    ],
+  },
+}
+
 const config = readJson(hooksPath) || {}
-config.hooks ||= {}
+if (!isPlainObject(config.hooks)) {
+  config.hooks = {}
+}
 
-ensureHook(config.hooks, 'SessionStart', {
-  matcher: 'startup|resume',
-  hooks: [
-    {
-      type: 'command',
-      command: path.join(os.homedir(), '.codex/hooks/openclaw-session-start.sh'),
-      timeout: 10,
-      statusMessage: 'Loading OpenClaw session token status',
-    },
-  ],
-})
-
-ensureHook(config.hooks, 'UserPromptSubmit', {
-  hooks: [
-    {
-      type: 'command',
-      command: path.join(os.homedir(), 'scripts/openclaw-session-tokens-status'),
-      timeout: 10,
-      statusMessage: 'Loading OpenClaw session token status',
-    },
-  ],
-})
+installCanonicalHook(config.hooks, 'SessionStart')
+installCanonicalHook(config.hooks, 'UserPromptSubmit')
 
 fs.mkdirSync(path.dirname(hooksPath), { recursive: true })
 writeJsonAtomic(hooksPath, config)
@@ -44,40 +67,49 @@ function readJson(file) {
 }
 
 function writeJsonAtomic(file, value) {
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`)
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`)
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
   fs.renameSync(tmp, file)
 }
 
-function ensureHook(hooks, event, entry) {
-  hooks[event] ||= []
+function installCanonicalHook(hooks, event) {
+  const groups = Array.isArray(hooks[event]) ? hooks[event] : []
+  const ownedCommands = packageCommands[event]
+  const keptGroups = []
 
-  const desiredHandlers = entry.hooks || []
-  const desiredCommands = new Set(
-    desiredHandlers
-      .map((handler) => handler?.command)
-      .filter((command) => typeof command === 'string'),
-  )
+  for (const group of groups) {
+    if (!isPlainObject(group)) {
+      keptGroups.push(group)
+      continue
+    }
 
-  const groupIndex = hooks[event].findIndex((candidate) =>
-    candidate?.hooks?.some((handler) => desiredCommands.has(handler?.command)),
-  )
+    const handlers = Array.isArray(group.hooks) ? group.hooks : []
+    const keptHandlers = handlers.filter((handler) => !isPackageOwnedHandler(handler, ownedCommands))
 
-  if (groupIndex === -1) {
-    hooks[event].push(entry)
-    return
+    if (keptHandlers.length > 0) {
+      keptGroups.push({
+        ...group,
+        hooks: keptHandlers,
+      })
+    } else if (handlers.length === 0) {
+      keptGroups.push(group)
+    }
   }
 
-  const existingGroup = hooks[event][groupIndex]
-  const existingHandlers = Array.isArray(existingGroup.hooks) ? existingGroup.hooks : []
-  const mergedHandlers = [
-    ...existingHandlers.filter((handler) => !desiredCommands.has(handler?.command)),
-    ...desiredHandlers,
-  ]
+  hooks[event] = [...keptGroups, canonicalGroups[event]]
+}
 
-  hooks[event][groupIndex] = {
-    ...existingGroup,
-    ...entry,
-    hooks: mergedHandlers,
-  }
+function isPackageOwnedHandler(handler, ownedCommands) {
+  return isPlainObject(handler)
+    && handler.type === 'command'
+    && typeof handler.command === 'string'
+    && ownedCommands.has(handler.command)
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

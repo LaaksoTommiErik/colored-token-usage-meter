@@ -10,11 +10,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Run tests
-        run: tests/run-tests.sh
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Bash syntax checks
+        run: |
+          bash -n install.sh
+          bash -n bin/openclaw-session-tokens-status
+          bash -n hooks/openclaw-session-start.sh
+          bash -n tests/run-tests.sh
+      - name: JavaScript syntax checks
+        run: |
+          node --check install-hooks.mjs
+          node --check bin/openclaw-session-tokens-prompt.js
+          node --check tests/installer.test.mjs
+          node --check tests/runtime.test.mjs
+      - name: ShellCheck
+        run: |
+          shellcheck install.sh \
+            bin/openclaw-session-tokens-status \
+            hooks/openclaw-session-start.sh \
+            tests/run-tests.sh
+      - name: Run automated tests
+        run: node --test tests/*.test.mjs

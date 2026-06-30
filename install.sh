@@ -3,11 +3,14 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 hooks_json="$HOME/.codex/hooks.json"
+required_commands=(node install mkdir)
 
-if ! command -v node >/dev/null 2>&1; then
-  printf 'Error: Node.js is required to install colored-token-usage-meter.\n' >&2
-  exit 1
-fi
+for command_name in "${required_commands[@]}"; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'Error: required command not found: %s\n' "$command_name" >&2
+    exit 1
+  fi
+done
 
 if [[ -f "$hooks_json" ]]; then
   node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$hooks_json" >/dev/null
