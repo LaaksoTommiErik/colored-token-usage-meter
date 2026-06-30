@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+raw="$($HOME/scripts/openclaw-session-tokens-prompt.js 2>/dev/null || true)"
+color="${raw%%$'\t'*}"
+text="${raw#*$'\t'}"
+
+if [[ "$color" == "$raw" ]]; then
+  color=""
+fi
+
+if [[ -n "$text" ]]; then
+  case "$color" in
+    32) sgr="1;32" ;;
+    33) sgr="38;5;208" ;;
+    91) sgr="1;91" ;;
+    *) sgr="" ;;
+  esac
+
+  if [[ -n "$sgr" ]]; then
+    printf '\033[%sm%s\033[0m\n' "$sgr" "$text"
+  else
+    printf '%s\n' "$text"
+  fi
+fi
