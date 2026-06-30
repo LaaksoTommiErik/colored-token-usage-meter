@@ -94,6 +94,53 @@ test('malformed Codex session lines are ignored', () => {
   assert.equal(promptOutput(codexHome), '')
 })
 
+test('parses a sanitized real Codex token_count record shape', () => {
+  const root = tmpDir('real-shape')
+  const codexHome = path.join(root, 'codex-home')
+  const sessionDir = path.join(codexHome, 'sessions/2026/06/30')
+  fs.mkdirSync(sessionDir, { recursive: true })
+
+  const record = {
+    timestamp: '2026-06-30T15:28:10.444Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: {
+          input_tokens: 8668251,
+          cached_input_tokens: 8230016,
+          output_tokens: 62546,
+          reasoning_output_tokens: 9363,
+          total_tokens: 8730797,
+        },
+        last_token_usage: {
+          input_tokens: 193911,
+          cached_input_tokens: 191872,
+          output_tokens: 589,
+          reasoning_output_tokens: 71,
+          total_tokens: 194500,
+        },
+        model_context_window: 258400,
+      },
+      rate_limits: {
+        limit_id: 'codex',
+        limit_name: null,
+        primary: { used_percent: 68.0, window_minutes: 300, resets_at: 1782845811 },
+        secondary: { used_percent: 21.0, window_minutes: 10080, resets_at: 1783414597 },
+        credits: null,
+        individual_limit: null,
+        plan_type: 'plus',
+        rate_limit_reached_type: null,
+      },
+    },
+  }
+  assert.equal(record.payload.info.last_token_usage.input_tokens, 193911)
+  assert.equal(record.payload.info.model_context_window, 258400)
+  fs.writeFileSync(path.join(sessionDir, 'session.jsonl'), `${JSON.stringify(record)}\n`)
+
+  assert.equal(promptOutput(codexHome), '91\tCX 193k/258k 75% [##########] in 193k cached 191k out 589 total 194k >= 100k new session')
+})
+
 test('uses latest Codex token_count event from newest session file', () => {
   const root = tmpDir('latest')
   const oldHome = writeCodexSession(root, { name: 'old', input_tokens: 10000, model_context_window: 258400 })

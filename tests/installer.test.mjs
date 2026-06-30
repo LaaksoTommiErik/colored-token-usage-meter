@@ -234,6 +234,13 @@ test('HOME path containing shell-sensitive quote is shell-quoted safely', () => 
   installOk(home)
   const command = readHooks(home).hooks.UserPromptSubmit.at(-1).hooks[0].command
   assert.equal(command, canonicalCommands(home).prompt)
+
+  const codexHome = writeCodexTokenSession(root)
+  const output = execFileSync('bash', ['-lc', command], {
+    env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
+    encoding: 'utf8',
+  })
+  assert.match(output, /CX 68k\/258k 26% \[######----\]/)
 })
 
 test('installed file permissions are 0755', () => {
