@@ -94,7 +94,7 @@ function hex(buffer) {
 }
 
 test('missing session data prints zero usage instead of stale usage', () => {
-  assert.equal(promptOutput({ CODEX_HOME: emptyCodexHome() }), '32	CX 0/272k 0% [----------] in 0 cached 0 out 0 total 0')
+  assert.equal(promptOutput({ CODEX_HOME: emptyCodexHome() }), '32	CX 0/170k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
 test('empty newest transcript prints zero usage instead of falling back to older sessions', () => {
@@ -104,7 +104,7 @@ test('empty newest transcript prints zero usage instead of falling back to older
   fs.utimesSync(older.transcriptPath, new Date('2026-06-30T00:00:00Z'), new Date('2026-06-30T00:00:00Z'))
   fs.utimesSync(empty.transcriptPath, new Date('2026-06-30T00:01:00Z'), new Date('2026-06-30T00:01:00Z'))
 
-  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '32	CX 0/272k 0% [----------] in 0 cached 0 out 0 total 0')
+  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '32	CX 0/170k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
 test('parses a sanitized real Codex token_count record shape', () => {
@@ -137,7 +137,7 @@ test('parses a sanitized real Codex token_count record shape', () => {
     rate_limits: rateLimits,
   })
 
-  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '91	CX 193k/258k 75% [##########] in 193k cached 191k out 589 total 194k >= 100k new session')
+  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '91	CX 193k/170k 114% [##########] in 193k cached 191k out 589 total 194k >= 170k new session')
 })
 
 test('uses the newest modified session file only', () => {
@@ -147,7 +147,7 @@ test('uses the newest modified session file only', () => {
   fs.utimesSync(older.transcriptPath, new Date('2026-06-30T00:00:00Z'), new Date('2026-06-30T00:00:00Z'))
   fs.utimesSync(newer.transcriptPath, new Date('2026-06-30T00:01:00Z'), new Date('2026-06-30T00:01:00Z'))
 
-  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '91	CX 170k/258k 66% [##########] in 170k cached 0 out 0 total 170k >= 100k new session')
+  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '91	CX 170k/170k 100% [##########] in 170k cached 0 out 0 total 170k >= 170k new session')
 })
 
 test('latest malformed token_count falls back to zero instead of older usage', () => {
@@ -158,19 +158,23 @@ test('latest malformed token_count falls back to zero instead of older usage', (
     ],
   })
 
-  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '32	CX 0/258k 0% [----------] in 0 cached 0 out 0 total 0')
+  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '32	CX 0/170k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
-test('token boundaries use Codex input tokens against model_context_window', () => {
+test('token boundaries use Codex input tokens against the 170k soft cap', () => {
   const cases = [
-    [0, '32	CX 0/258k 0% [----------] in 0 cached 0 out 0 total 0'],
-    [9999, '32	CX 9.9k/258k 4% [----------] in 9.9k cached 0 out 0 total 9.9k'],
-    [10000, '32	CX 10k/258k 4% [#---------] in 10k cached 0 out 0 total 10k'],
-    [68000, '32	CX 68k/258k 26% [######----] in 68k cached 0 out 0 total 68k'],
-    [89999, '32	CX 89.9k/258k 35% [########--] in 89.9k cached 0 out 0 total 89.9k'],
-    [90000, '33	CX 90k/258k 35% [#########-] in 90k cached 0 out 0 total 90k'],
-    [99999, '33	CX 99.9k/258k 39% [#########-] in 99.9k cached 0 out 0 total 99.9k'],
-    [100000, '91	CX 100k/258k 39% [##########] in 100k cached 0 out 0 total 100k >= 100k new session'],
+    [0, '32	CX 0/170k 0% [----------] in 0 cached 0 out 0 total 0'],
+    [9999, '32	CX 9.9k/170k 6% [----------] in 9.9k cached 0 out 0 total 9.9k'],
+    [10000, '32	CX 10k/170k 6% [----------] in 10k cached 0 out 0 total 10k'],
+    [68000, '32	CX 68k/170k 40% [####------] in 68k cached 0 out 0 total 68k'],
+    [89999, '32	CX 89.9k/170k 53% [#####-----] in 89.9k cached 0 out 0 total 89.9k'],
+    [90000, '32	CX 90k/170k 53% [#####-----] in 90k cached 0 out 0 total 90k'],
+    [99999, '32	CX 99.9k/170k 59% [#####-----] in 99.9k cached 0 out 0 total 99.9k'],
+    [100000, '32	CX 100k/170k 59% [#####-----] in 100k cached 0 out 0 total 100k'],
+    [144499, '32	CX 144k/170k 85% [########--] in 144k cached 0 out 0 total 144k'],
+    [144500, '33	CX 144k/170k 85% [########--] in 144k cached 0 out 0 total 144k'],
+    [169999, '33	CX 169k/170k 100% [#########-] in 169k cached 0 out 0 total 169k'],
+    [170000, '91	CX 170k/170k 100% [##########] in 170k cached 0 out 0 total 170k >= 170k new session'],
   ]
   for (const [input_tokens, expected] of cases) {
     const { codexHome } = writeCodexSession(tmpDir('boundary-' + input_tokens), { input_tokens })
@@ -184,7 +188,7 @@ test('custom thresholds and fallback context are honored', () => {
     CODEX_HOME: codexHome,
     OPENCLAW_PROMPT_WARNING_LIMIT: '40000',
     OPENCLAW_PROMPT_SOFT_LIMIT: '60000',
-  }), '33	CX 50k/258k 19% [#####-----] in 50k cached 0 out 0 total 50k')
+  }), '33	CX 50k/170k 29% [##--------] in 50k cached 0 out 0 total 50k')
 
   assert.equal(promptOutput({
     CODEX_HOME: emptyCodexHome(),
@@ -197,8 +201,8 @@ test('wrapper emits exact green, orange, and red ANSI prefixes', () => {
   const home = installWrapperHome(root)
   const cases = [
     [68000, '1b5b313b33326d'],
-    [95000, '1b5b33383b353b3230386d'],
-    [100000, '1b5b313b39316d'],
+    [144500, '1b5b33383b353b3230386d'],
+    [170000, '1b5b313b39316d'],
   ]
   for (const [input_tokens, prefix] of cases) {
     const { codexHome } = writeCodexSession(tmpDir('ansi-' + input_tokens), { input_tokens })

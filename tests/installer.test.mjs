@@ -235,7 +235,7 @@ test('HOME path containing spaces works and hook command executes through a shel
     env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
     encoding: 'utf8',
   })
-  assert.match(output, /CX 68k\/258k 26% \[######----\]/)
+  assert.match(output, /CX 68k\/170k 40% \[####------\]/)
 })
 
 test('HOME path containing shell-sensitive quote is shell-quoted safely', () => {
@@ -251,7 +251,7 @@ test('HOME path containing shell-sensitive quote is shell-quoted safely', () => 
     env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
     encoding: 'utf8',
   })
-  assert.match(output, /CX 68k\/258k 26% \[######----\]/)
+  assert.match(output, /CX 68k\/170k 40% \[####------\]/)
 })
 
 test('installed file permissions are 0755', () => {

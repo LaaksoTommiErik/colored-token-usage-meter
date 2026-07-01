@@ -3,9 +3,9 @@
 const fs = require('fs')
 const path = require('path')
 
-const DEFAULT_CONTEXT_FALLBACK = 272000
-const DEFAULT_WARNING_LIMIT = 90000
-const DEFAULT_SESSION_LIMIT = 100000
+const DEFAULT_CONTEXT_FALLBACK = 170000
+const DEFAULT_WARNING_LIMIT = 144500
+const DEFAULT_SESSION_LIMIT = 170000
 
 const home = process.env.HOME || ''
 const codexHome = process.env.CODEX_HOME || path.join(home, '.codex')
@@ -31,7 +31,7 @@ function trimFixed(value, digits) {
 }
 
 function formatMeter(value) {
-  const blockSize = 10_000
+  const blockSize = 17_000
   const blockCount = 10
   const filled = Math.max(0, Math.min(blockCount, Math.floor(value / blockSize)))
   return `[${'#'.repeat(filled)}${'-'.repeat(blockCount - filled)}]`
@@ -47,10 +47,6 @@ function nonNegativeFinite(value, fallback = 0) {
   return Number.isFinite(number) && number >= 0 ? number : fallback
 }
 
-function positiveFinite(value, fallback) {
-  const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? number : fallback
-}
 
 function collectSessionFiles(dir, out = []) {
   let entries
@@ -121,7 +117,7 @@ const used = nonNegativeFinite(last.input_tokens)
 const total = nonNegativeFinite(last.total_tokens)
 const cached = nonNegativeFinite(last.cached_input_tokens)
 const output = nonNegativeFinite(last.output_tokens)
-const context = positiveFinite(tokenCount.model_context_window, contextFallback)
+const context = contextFallback
 const percent = Math.round((used / context) * 100)
 const overLimit = used >= sessionLimit
 const meter = formatMeter(used)
