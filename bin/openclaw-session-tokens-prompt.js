@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
 const fs = require('fs')
+const path = require('path')
 
+const DEFAULT_CONTEXT_FALLBACK = 272000
 const DEFAULT_WARNING_LIMIT = 90000
 const DEFAULT_SESSION_LIMIT = 100000
 
+const home = process.env.HOME || ''
+const codexHome = process.env.CODEX_HOME || path.join(home, '.codex')
 const warningLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_WARNING_LIMIT', DEFAULT_WARNING_LIMIT)
 const sessionLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_SOFT_LIMIT', DEFAULT_SESSION_LIMIT)
+const contextFallback = positiveFiniteFromEnv('OPENCLAW_PROMPT_CONTEXT_FALLBACK', DEFAULT_CONTEXT_FALLBACK)
 
 function formatTokens(value) {
   if (!Number.isFinite(value) || value <= 0) return '0'
@@ -37,46 +42,48 @@ function positiveFiniteFromEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-function validNonNegativeNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+function nonNegativeFinite(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : fallback
 }
 
-function validPositiveNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
+function positiveFinite(value, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : fallback
 }
 
-function readHookInput() {
-  let stat
+function collectSessionFiles(dir, out = []) {
+  let entries
   try {
-    stat = fs.fstatSync(0)
+    entries = fs.readdirSync(dir, { withFileTypes: true })
   } catch {
-    return null
+    return out
   }
 
-  if (stat.isCharacterDevice()) return null
-
-  let text
-  try {
-    text = fs.readFileSync(0, 'utf8')
-  } catch {
-    return null
-  }
-
-  if (!text.trim()) return null
-
-  try {
-    const input = JSON.parse(text)
-    if (input && typeof input === 'object' && typeof input.transcript_path === 'string' && input.transcript_path.length > 0) {
-      return input
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      collectSessionFiles(full, out)
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      try {
+        out.push({ file: full, mtimeMs: fs.statSync(full).mtimeMs })
+      } catch {
+        // Ignore files that disappear while scanning.
+      }
     }
-  } catch {
-    return null
   }
-
-  return null
+  return out
 }
 
-function lastValidTokenCountInFile(file) {
+function latestCodexTokenCount() {
+  const latest = collectSessionFiles(path.join(codexHome, 'sessions'))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file))[0]
+
+  if (!latest) return null
+  return lastTokenCountInFile(latest.file)
+}
+
+function lastTokenCountInFile(file) {
   let text
   try {
     text = fs.readFileSync(file, 'utf8')
@@ -92,43 +99,29 @@ function lastValidTokenCountInFile(file) {
     } catch {
       continue
     }
-
-    if (event?.type !== 'event_msg' || event.payload?.type !== 'token_count') {
-      continue
+    if (event?.type === 'event_msg' && event.payload?.type === 'token_count') {
+      return event.payload.info || null
     }
-
-    const tokenCount = parseTokenCount(event.payload.info)
-    if (tokenCount) return tokenCount
   }
   return null
 }
 
-function parseTokenCount(info) {
-  if (!info || typeof info !== 'object' || Array.isArray(info)) return null
-  if (!validPositiveNumber(info.model_context_window)) return null
-
-  const last = info.last_token_usage
-  if (!last || typeof last !== 'object' || Array.isArray(last)) return null
-
-  const required = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens']
-  if (!required.every((field) => validNonNegativeNumber(last[field]))) return null
-
-  return {
-    used: last.input_tokens,
-    cached: last.cached_input_tokens,
-    output: last.output_tokens,
-    total: last.total_tokens,
-    context: info.model_context_window,
-  }
+const tokenCount = latestCodexTokenCount() || {
+  last_token_usage: {
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  },
+  model_context_window: contextFallback,
 }
 
-const hookInput = readHookInput()
-if (!hookInput) process.exit(0)
-
-const tokenCount = lastValidTokenCountInFile(hookInput.transcript_path)
-if (!tokenCount) process.exit(0)
-
-const { used, cached, output, total, context } = tokenCount
+const last = tokenCount.last_token_usage || {}
+const used = nonNegativeFinite(last.input_tokens)
+const total = nonNegativeFinite(last.total_tokens)
+const cached = nonNegativeFinite(last.cached_input_tokens)
+const output = nonNegativeFinite(last.output_tokens)
+const context = positiveFinite(tokenCount.model_context_window, contextFallback)
 const percent = Math.round((used / context) * 100)
 const overLimit = used >= sessionLimit
 const meter = formatMeter(used)
@@ -139,4 +132,4 @@ const label = overLimit
   : `CX ${formatTokens(used)}/${formatTokens(context)} ${percent}% ${meter} ${detail}`
 
 const color = used >= sessionLimit ? '91' : used >= warningLimit ? '33' : '32'
-console.log(`${color}	${label}`)
+console.log(`${color}\t${label}`)

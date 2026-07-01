@@ -230,10 +230,9 @@ test('HOME path containing spaces works and hook command executes through a shel
   const command = config.hooks.UserPromptSubmit.at(-1).hooks[0].command
   assert.equal(command, canonicalCommands(home).prompt)
 
-  const { transcriptPath } = writeCodexTokenSession(root)
+  const { codexHome } = writeCodexTokenSession(root)
   const output = execFileSync('bash', ['-lc', command], {
-    env: { ...process.env, HOME: home },
-    input: hookInput(transcriptPath),
+    env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
     encoding: 'utf8',
   })
   assert.match(output, /CX 68k\/258k 26% \[######----\]/)
@@ -247,10 +246,9 @@ test('HOME path containing shell-sensitive quote is shell-quoted safely', () => 
   const command = readHooks(home).hooks.UserPromptSubmit.at(-1).hooks[0].command
   assert.equal(command, canonicalCommands(home).prompt)
 
-  const { transcriptPath } = writeCodexTokenSession(root)
+  const { codexHome } = writeCodexTokenSession(root)
   const output = execFileSync('bash', ['-lc', command], {
-    env: { ...process.env, HOME: home },
-    input: hookInput(transcriptPath),
+    env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
     encoding: 'utf8',
   })
   assert.match(output, /CX 68k\/258k 26% \[######----\]/)

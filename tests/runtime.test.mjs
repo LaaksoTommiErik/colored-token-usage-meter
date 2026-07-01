@@ -10,7 +10,7 @@ const promptScript = path.join(repoDir, 'bin/openclaw-session-tokens-prompt.js')
 const statusWrapper = path.join(repoDir, 'bin/openclaw-session-tokens-status')
 
 function tmpDir(name) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `ctum-runtime-${name}-`))
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'ctum-runtime-' + name + '-'))
 }
 
 function tokenEvent(record) {
@@ -47,36 +47,30 @@ function writeCodexSession(root, records) {
   const codexHome = path.join(root, 'codex-home')
   const sessionDir = path.join(codexHome, 'sessions/2026/06/30')
   fs.mkdirSync(sessionDir, { recursive: true })
-  const file = path.join(sessionDir, `${records.name || 'session'}.jsonl`)
+  const file = path.join(sessionDir, (records.name || 'session') + '.jsonl')
   const events = records.events || [records]
   const lines = events.map((record) => JSON.stringify(record.raw || tokenEvent(record)))
-  fs.writeFileSync(file, `${lines.join('\n')}\n`)
+  fs.writeFileSync(file, lines.join('\n') + '\n')
   return { codexHome, transcriptPath: file }
 }
 
-function hookInput(transcriptPath, overrides = {}) {
-  return JSON.stringify({
-    session_id: 'test-session',
-    transcript_path: transcriptPath,
-    cwd: repoDir,
-    hook_event_name: 'UserPromptSubmit',
-    turn_id: 'test-turn',
-    ...overrides,
-  })
-}
-
-function runPrompt(input, env = {}) {
+function runPrompt(env = {}) {
   return spawnSync(promptScript, [], {
     env: { ...process.env, ...env },
-    input,
     encoding: 'utf8',
   })
 }
 
-function promptOutput(input, env = {}) {
-  const result = runPrompt(input, env)
+function promptOutput(env = {}) {
+  const result = runPrompt(env)
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.trimEnd()
+}
+
+function emptyCodexHome(root = tmpDir('empty-codex-home')) {
+  const codexHome = path.join(root, 'codex-home')
+  fs.mkdirSync(codexHome, { recursive: true })
+  return codexHome
 }
 
 function installWrapperHome(root) {
@@ -89,10 +83,9 @@ function installWrapperHome(root) {
   return home
 }
 
-function runInstalledStatus(home, input) {
+function runInstalledStatus(home, env = {}) {
   return spawnSync(path.join(home, 'scripts/openclaw-session-tokens-status'), [], {
-    env: { ...process.env, HOME: home },
-    input,
+    env: { ...process.env, HOME: home, ...env },
   })
 }
 
@@ -100,28 +93,18 @@ function hex(buffer) {
   return buffer.toString('hex')
 }
 
-test('missing hook input produces no output and exit code zero', () => {
-  const result = runPrompt('')
-  assert.equal(result.status, 0)
-  assert.equal(result.stdout, '')
+test('missing session data prints zero usage instead of stale usage', () => {
+  assert.equal(promptOutput({ CODEX_HOME: emptyCodexHome() }), '32	CX 0/272k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
-test('hook input without transcript_path produces no output', () => {
-  assert.equal(promptOutput(JSON.stringify({ hook_event_name: 'UserPromptSubmit' })), '')
-  assert.equal(promptOutput(JSON.stringify({ transcript_path: null })), '')
-})
+test('empty newest transcript prints zero usage instead of falling back to older sessions', () => {
+  const root = tmpDir('empty-newest')
+  const older = writeCodexSession(root, { name: 'older', input_tokens: 170000, model_context_window: 258400 })
+  const empty = writeCodexSession(root, { name: 'newest', events: [] })
+  fs.utimesSync(older.transcriptPath, new Date('2026-06-30T00:00:00Z'), new Date('2026-06-30T00:00:00Z'))
+  fs.utimesSync(empty.transcriptPath, new Date('2026-06-30T00:01:00Z'), new Date('2026-06-30T00:01:00Z'))
 
-test('missing transcript produces no output and exit code zero', () => {
-  const result = runPrompt(hookInput(path.join(tmpDir('missing'), 'missing.jsonl')))
-  assert.equal(result.status, 0)
-  assert.equal(result.stdout, '')
-})
-
-test('malformed Codex session lines are ignored', () => {
-  const root = tmpDir('malformed')
-  const file = path.join(root, 'session.jsonl')
-  fs.writeFileSync(file, '{bad\\n')
-  assert.equal(promptOutput(hookInput(file)), '')
+  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '32	CX 0/272k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
 test('parses a sanitized real Codex token_count record shape', () => {
@@ -136,7 +119,7 @@ test('parses a sanitized real Codex token_count record shape', () => {
     plan_type: 'plus',
     rate_limit_reached_type: null,
   }
-  const { transcriptPath } = writeCodexSession(root, {
+  const { codexHome } = writeCodexSession(root, {
     timestamp: '2026-06-30T15:28:10.444Z',
     input_tokens: 193911,
     cached_input_tokens: 191872,
@@ -154,63 +137,28 @@ test('parses a sanitized real Codex token_count record shape', () => {
     rate_limits: rateLimits,
   })
 
-  assert.equal(promptOutput(hookInput(transcriptPath)), '91	CX 193k/258k 75% [##########] in 193k cached 191k out 589 total 194k >= 100k new session')
+  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '91	CX 193k/258k 75% [##########] in 193k cached 191k out 589 total 194k >= 100k new session')
 })
 
-test('uses transcript_path instead of the newest modified session file', () => {
-  const root = tmpDir('active-session')
-  const active = writeCodexSession(root, { name: 'active', input_tokens: 30000, model_context_window: 258400 })
+test('uses the newest modified session file only', () => {
+  const root = tmpDir('newest-session')
+  const older = writeCodexSession(root, { name: 'older', input_tokens: 30000, model_context_window: 258400 })
   const newer = writeCodexSession(root, { name: 'newer', input_tokens: 170000, model_context_window: 258400 })
-  fs.utimesSync(active.transcriptPath, new Date('2026-06-30T00:00:00Z'), new Date('2026-06-30T00:00:00Z'))
+  fs.utimesSync(older.transcriptPath, new Date('2026-06-30T00:00:00Z'), new Date('2026-06-30T00:00:00Z'))
   fs.utimesSync(newer.transcriptPath, new Date('2026-06-30T00:01:00Z'), new Date('2026-06-30T00:01:00Z'))
 
-  assert.equal(promptOutput(hookInput(active.transcriptPath)), '32	CX 30k/258k 12% [###-------] in 30k cached 0 out 0 total 30k')
+  assert.equal(promptOutput({ CODEX_HOME: older.codexHome }), '91	CX 170k/258k 66% [##########] in 170k cached 0 out 0 total 170k >= 100k new session')
 })
 
-test('empty active transcript does not fall back to another session', () => {
-  const root = tmpDir('empty-active')
-  const active = path.join(root, 'active.jsonl')
-  fs.writeFileSync(active, '')
-  writeCodexSession(root, { name: 'other', input_tokens: 170000, model_context_window: 258400 })
-
-  assert.equal(promptOutput(hookInput(active)), '')
-})
-
-test('latest malformed token_count is skipped in favor of older valid usage', () => {
-  const root = tmpDir('older-valid')
-  const { transcriptPath } = writeCodexSession(root, {
+test('latest malformed token_count falls back to zero instead of older usage', () => {
+  const { codexHome } = writeCodexSession(tmpDir('malformed-latest'), {
     events: [
       { input_tokens: 68000, cached_input_tokens: 64000, output_tokens: 500, total_tokens: 68500, model_context_window: 258400 },
       { raw: { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 'bad' }, model_context_window: 258400 } } } },
     ],
   })
 
-  assert.equal(promptOutput(hookInput(transcriptPath)), '32	CX 68k/258k 26% [######----] in 68k cached 64k out 500 total 68.5k')
-})
-
-test('invalid primary token values produce no output instead of zero usage', () => {
-  const cases = [
-    { input_tokens: -5, cached_input_tokens: 0, output_tokens: 0, total_tokens: 0, model_context_window: 258400 },
-    { info: { last_token_usage: { cached_input_tokens: 0, output_tokens: 0, total_tokens: 0 }, model_context_window: 258400 } },
-    { info: { last_token_usage: { input_tokens: '68000', cached_input_tokens: 0, output_tokens: 0, total_tokens: 68000 }, model_context_window: 258400 } },
-  ]
-
-  for (const record of cases) {
-    const { transcriptPath } = writeCodexSession(tmpDir('invalid-primary'), record)
-    assert.equal(promptOutput(hookInput(transcriptPath)), '')
-  }
-})
-
-test('missing or invalid context window produces no synthetic denominator', () => {
-  const cases = [
-    { info: { last_token_usage: { input_tokens: 68000, cached_input_tokens: 0, output_tokens: 0, total_tokens: 68000 } } },
-    { input_tokens: 68000, model_context_window: -1 },
-  ]
-
-  for (const record of cases) {
-    const { transcriptPath } = writeCodexSession(tmpDir('invalid-context'), record)
-    assert.equal(promptOutput(hookInput(transcriptPath)), '')
-  }
+  assert.equal(promptOutput({ CODEX_HOME: codexHome }), '32	CX 0/258k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
 test('token boundaries use Codex input tokens against model_context_window', () => {
@@ -225,20 +173,26 @@ test('token boundaries use Codex input tokens against model_context_window', () 
     [100000, '91	CX 100k/258k 39% [##########] in 100k cached 0 out 0 total 100k >= 100k new session'],
   ]
   for (const [input_tokens, expected] of cases) {
-    const { transcriptPath } = writeCodexSession(tmpDir(`boundary-${input_tokens}`), { input_tokens })
-    assert.equal(promptOutput(hookInput(transcriptPath)), expected)
+    const { codexHome } = writeCodexSession(tmpDir('boundary-' + input_tokens), { input_tokens })
+    assert.equal(promptOutput({ CODEX_HOME: codexHome }), expected)
   }
 })
 
-test('custom thresholds are honored without changing reported context', () => {
-  const { transcriptPath } = writeCodexSession(tmpDir('custom'), { input_tokens: 50000, model_context_window: 258400 })
-  assert.equal(promptOutput(hookInput(transcriptPath), {
+test('custom thresholds and fallback context are honored', () => {
+  const { codexHome } = writeCodexSession(tmpDir('custom'), { input_tokens: 50000, model_context_window: 258400 })
+  assert.equal(promptOutput({
+    CODEX_HOME: codexHome,
     OPENCLAW_PROMPT_WARNING_LIMIT: '40000',
     OPENCLAW_PROMPT_SOFT_LIMIT: '60000',
   }), '33	CX 50k/258k 19% [#####-----] in 50k cached 0 out 0 total 50k')
+
+  assert.equal(promptOutput({
+    CODEX_HOME: emptyCodexHome(),
+    OPENCLAW_PROMPT_CONTEXT_FALLBACK: '123000',
+  }), '32	CX 0/123k 0% [----------] in 0 cached 0 out 0 total 0')
 })
 
-test('wrapper forwards hook stdin and emits exact green, orange, and red ANSI prefixes', () => {
+test('wrapper emits exact green, orange, and red ANSI prefixes', () => {
   const root = tmpDir('ansi')
   const home = installWrapperHome(root)
   const cases = [
@@ -247,8 +201,8 @@ test('wrapper forwards hook stdin and emits exact green, orange, and red ANSI pr
     [100000, '1b5b313b39316d'],
   ]
   for (const [input_tokens, prefix] of cases) {
-    const { transcriptPath } = writeCodexSession(tmpDir(`ansi-${input_tokens}`), { input_tokens })
-    const result = runInstalledStatus(home, hookInput(transcriptPath))
+    const { codexHome } = writeCodexSession(tmpDir('ansi-' + input_tokens), { input_tokens })
+    const result = runInstalledStatus(home, { CODEX_HOME: codexHome })
     assert.equal(result.status, 0)
     const bytes = hex(result.stdout)
     assert.equal(bytes.startsWith(prefix), true)
@@ -262,7 +216,7 @@ test('wrapper failure does not block the hook', () => {
   const home = installWrapperHome(root)
   fs.writeFileSync(path.join(home, 'scripts/openclaw-session-tokens-prompt.js'), '#!/usr/bin/env bash\nexit 42\n')
   fs.chmodSync(path.join(home, 'scripts/openclaw-session-tokens-prompt.js'), 0o755)
-  const result = runInstalledStatus(home, hookInput(path.join(root, 'missing.jsonl')))
+  const result = runInstalledStatus(home, { CODEX_HOME: emptyCodexHome(root) })
   assert.equal(result.status, 0)
   assert.equal(result.stdout.length, 0)
 })
