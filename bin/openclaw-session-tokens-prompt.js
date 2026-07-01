@@ -3,15 +3,11 @@
 const fs = require('fs')
 const path = require('path')
 
-const DEFAULT_CONTEXT_FALLBACK = 170000
-const DEFAULT_WARNING_LIMIT = 144500
 const DEFAULT_SESSION_LIMIT = 170000
 
 const home = process.env.HOME || ''
 const codexHome = process.env.CODEX_HOME || path.join(home, '.codex')
-const warningLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_WARNING_LIMIT', DEFAULT_WARNING_LIMIT)
 const sessionLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_SOFT_LIMIT', DEFAULT_SESSION_LIMIT)
-const contextFallback = positiveFiniteFromEnv('OPENCLAW_PROMPT_CONTEXT_FALLBACK', DEFAULT_CONTEXT_FALLBACK)
 
 function formatTokens(value) {
   if (!Number.isFinite(value) || value <= 0) return '0'
@@ -30,9 +26,9 @@ function trimFixed(value, digits) {
   return value.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
 }
 
-function formatMeter(value) {
-  const blockSize = 17_000
+function formatMeter(value, max) {
   const blockCount = 10
+  const blockSize = max / blockCount
   const filled = Math.max(0, Math.min(blockCount, Math.floor(value / blockSize)))
   return `[${'#'.repeat(filled)}${'-'.repeat(blockCount - filled)}]`
 }
@@ -47,6 +43,10 @@ function nonNegativeFinite(value, fallback = 0) {
   return Number.isFinite(number) && number >= 0 ? number : fallback
 }
 
+function positiveFinite(value, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : fallback
+}
 
 function collectSessionFiles(dir, out = []) {
   let entries
@@ -102,14 +102,11 @@ function lastTokenCountInFile(file) {
   return null
 }
 
-const tokenCount = latestCodexTokenCount() || {
-  last_token_usage: {
-    input_tokens: 0,
-    cached_input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-  },
-  model_context_window: contextFallback,
+const tokenCount = latestCodexTokenCount()
+
+if (!tokenCount) {
+  console.log(`33\tCodex session: token status unavailable; no token-count event found`)
+  process.exit(0)
 }
 
 const last = tokenCount.last_token_usage || {}
@@ -117,15 +114,15 @@ const used = nonNegativeFinite(last.input_tokens)
 const total = nonNegativeFinite(last.total_tokens)
 const cached = nonNegativeFinite(last.cached_input_tokens)
 const output = nonNegativeFinite(last.output_tokens)
-const context = contextFallback
-const percent = Math.round((used / context) * 100)
-const overLimit = used >= sessionLimit
-const meter = formatMeter(used)
-const detail = `in ${formatTokens(used)} cached ${formatTokens(cached)} out ${formatTokens(output)} total ${formatTokens(total)}`
+const context = positiveFinite(tokenCount.model_context_window, sessionLimit)
+const softCap = Math.min(sessionLimit, context)
+const warningLimit = positiveFiniteFromEnv('OPENCLAW_PROMPT_WARNING_LIMIT', Math.floor(softCap * 0.85))
+const percent = Math.round((used / softCap) * 100)
+const overLimit = used >= softCap
+const meter = formatMeter(used, softCap)
+const detail = `ctx in ${formatTokens(used)} cached ${formatTokens(cached)} out ${formatTokens(output)} total ${formatTokens(total)}`
 
-const label = overLimit
-  ? `CX ${formatTokens(used)}/${formatTokens(context)} ${percent}% ${meter} ${detail} >= ${formatTokens(sessionLimit)} new session`
-  : `CX ${formatTokens(used)}/${formatTokens(context)} ${percent}% ${meter} ${detail}`
+const label = `Codex session ${formatTokens(used)}/${formatTokens(softCap)} soft cap ${percent}% ${meter} ${detail}${overLimit ? ` >= ${formatTokens(softCap)} new session` : ""}`
 
-const color = used >= sessionLimit ? '91' : used >= warningLimit ? '33' : '32'
+const color = overLimit ? '91' : used >= warningLimit ? '33' : '32'
 console.log(`${color}\t${label}`)
